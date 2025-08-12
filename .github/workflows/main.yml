@@ -23,4 +23,4 @@ jobs:
 
     - name: Run script
       run: |
-        python yourscript.py
+        python "Final version minions works gemeini buildt.py"
