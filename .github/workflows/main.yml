@@ -1,57 +1,58 @@
 # A human-readable name for your workflow
 name: Run Neuro Bot
 
+# --- CONCURRENCY ---
+# This is the secret sauce. It ensures only ONE instance of this workflow runs at a time.
+# If a new run is triggered (e.g., by the schedule), it will automatically cancel the previous run.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 # --- TRIGGERS ---
 # This section defines WHEN the workflow will run.
 on:
   # 1. Allows you to manually start the workflow from the Actions tab.
   workflow_dispatch:
 
-  # 2. (Optional but recommended) Automatically starts the workflow when you push code to the main branch.
+  # 2. Automatically starts the workflow every 6 hours.
+  # It's like setting a recurring alarm clock for your bot.
+  # `0 */6 * * *` means "at minute 0 of every 6th hour".
+  schedule:
+    - cron: '0 */6 * * *'
+
+  # 3. (Optional but good to keep) Automatically starts on a push to main.
   push:
     branches: [ "main" ]
 
 # --- JOBS ---
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
-  # We have one job called "run-bot"
   run-bot:
-    # The type of virtual machine to run the job on. "ubuntu-latest" is the best choice.
     runs-on: ubuntu-latest
-
-    # --- STEPS ---
-    # A sequence of tasks that will be executed as part of the job.
     steps:
-      # Step 1: Checks out your repository's code so the job can access it.
       - name: Check out repository code
         uses: actions/checkout@v3
 
-      # Step 2: Sets up a Python environment for you.
       - name: Set up Python 3.10
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # Step 3: Install system dependencies needed for Chrome.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y wget xvfb
 
-      # Step 4: Install Google Chrome browser itself.
       - name: Install Google Chrome
         run: |
           wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo dpkg -i google-chrome-stable_current_amd64.deb
           sudo apt-get install -f -y # Install any missing dependencies for Chrome
 
-      # Step 5: Install the Python packages required by your script.
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install numpy selenium requests fake-useragent psutil "urllib3<2"
 
-      # Step 6: Run your Python script with the CORRECT filename.
       - name: Run Neuro Bot Script
         env:
           FIREBASE_GMAIL_USER: ${{ secrets.FIREBASE_GMAIL_USER }}
