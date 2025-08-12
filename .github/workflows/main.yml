@@ -3,7 +3,7 @@ name: Run Bot
 on:
   workflow_dispatch: # Manual trigger
   schedule:
-    - cron: "0 */6 * * *" # Restart every 6 hours
+    - cron: "0 */6 * * *" # Runs every 6 hours
 
 jobs:
   run:
