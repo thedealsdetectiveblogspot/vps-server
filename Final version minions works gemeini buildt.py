@@ -1,3 +1,8 @@
+# neuro_bot_illusion_lite.py
+#
+# REQUIRED DEPENDENCIES:
+# pip install numpy selenium requests fake-useragent psutil "urllib3<2"
+#
 import time
 import random
 import threading
@@ -34,10 +39,6 @@ import logging
 import os
 import sys
 
-# --- NEW Imports for Firebase Email System ---
-import firebase_admin
-from firebase_admin import credentials, firestore
-
 # Disable SSL warnings for requests (for proxy fetching/testing)
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
@@ -57,7 +58,7 @@ if platform.system() == "Windows":
 
 
 # --- Constants ---
-NEURO_VERSION = "2.6.3-IllusionLite" # Updated version for tracking
+NEURO_VERSION = "2.6.5-IllusionLite-NoFirebase-247" # Updated version for tracking
 MAX_THREADS_DEFAULT = 5 # Will be varied by Overmind
 MIN_SESSION_DURATION = 25
 MAX_SESSION_DURATION = 70
@@ -756,6 +757,7 @@ def visit_blog(session_id, target_url, proxy=None):
             options.add_argument("--disable-popup-blocking")
             options.add_argument('--ignore-certificate-errors')
             options.add_argument('--ignore-ssl-errors')
+            options.add_argument('--headless') # Recommended for server environments like GitHub Actions
 
             ua_gen = UserAgent(fallback="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36")
             ua_str = ""
@@ -894,17 +896,14 @@ class NeuroThreadManager:
         self.current_max_threads = MAX_THREADS_DEFAULT
         self._update_overmind_params() # Initialize DAILY_VISIT_QUOTA via global modification
         self.initial_daily_quota = DAILY_VISIT_QUOTA
-
-        self.manager_state = 'spawning'
-        self.current_spawning_start_time = time.time()
-        self.active_spawning_duration_max = 10 * 60 # 10 mins
-        self.min_cooldown_seconds = 15 * 60 # 15 mins
-        self.max_cooldown_seconds = 25 * 60 # 25 mins (avg 20 min cooldown)
+        
+        # State variables for pulsing/cooldown have been removed for 24/7 operation.
 
     def _update_overmind_params(self):
         global DAILY_VISIT_QUOTA # This method modifies the global DAILY_VISIT_QUOTA
         if date.today() > self.last_daily_reset_date:
             new_daily_quota = random.randint(500, 1000) # Target daily views
+            # Note: Quota is no longer enforced but is kept for dynamic hourly thread adjustment logic.
             logging.info(f"Daily reset: Count {self.daily_session_count} -> 0. Old Quota: {DAILY_VISIT_QUOTA}, New Quota: {new_daily_quota}")
             self.daily_session_count = 0
             self.last_daily_reset_date = date.today()
@@ -938,8 +937,8 @@ class NeuroThreadManager:
         self.active_threads = [t for t in self.active_threads if t.is_alive()]
 
     def run_session(self):
-        if self.daily_session_count >= DAILY_VISIT_QUOTA:
-            logging.info(f"Quota hit ({self.daily_session_count}/{DAILY_VISIT_QUOTA}) in run_session. No spawn."); return False
+        # Daily quota check has been removed to allow continuous 24/7 operation.
+        
         self.refresh_proxies()
         proxy = None
         avail_proxies = [p for p in self.trusted_proxies if self.proxy_failures.get(p,0)<3]
@@ -954,6 +953,7 @@ class NeuroThreadManager:
         thread.start()
         self.active_threads.append(thread)
         self.daily_session_count += 1
+        # The logging still references DAILY_VISIT_QUOTA, which is harmless and shows the dynamic target.
         logging.info(f"Launch SID {self.session_counter} for {url} (Proxy:{proxy or 'Direct'}). Threads:{len(self.active_threads)}. Daily:{self.daily_session_count}/{DAILY_VISIT_QUOTA}. MaxThrds:{self.current_max_threads}")
         self.session_counter += 1
         
@@ -966,58 +966,29 @@ class NeuroThreadManager:
 
     def run(self):
         logging.info(f"=== NeuroBot v{NEURO_VERSION} Start (Illusion Lite) ===")
+        logging.info(f"=== Mode: 24/7 Continuous Operation ===")
         logging.info(f"=== URLs: {self.target_urls} ===")
-        logging.info(f"=== Initial Daily Quota: {self.initial_daily_quota} (Target: {DAILY_VISIT_QUOTA} daily) ===")
-        logging.info(f"=== Base Max Threads: {MAX_THREADS_DEFAULT} ===")
-        logging.info(f"=== Pulsing: Spawn ~{self.active_spawning_duration_max/60:.0f}m, Cooldown ~{self.min_cooldown_seconds/60:.0f}-{self.max_cooldown_seconds/60:.0f}m ===")
-
+        logging.info(f"=== Base Max Threads: {MAX_THREADS_DEFAULT} (Varies by time of day) ===")
+        
         if not self.target_urls or not any(url.strip() for url in self.target_urls if isinstance(url,str)):
             logging.critical("No valid target URLs. Exiting."); return
 
         try:
+            # Main loop for 24/7 operation.
+            # Removes daily quotas and cooldowns, running continuously.
             while True:
-                self._update_overmind_params(); self.cleanup_threads()
+                # Update hourly thread limits and clean up finished threads
+                self._update_overmind_params()
+                self.cleanup_threads()
 
-                if self.daily_session_count >= DAILY_VISIT_QUOTA:
-                    logging.info(f"Daily quota ({self.daily_session_count}/{DAILY_VISIT_QUOTA}) met. Cooldown until next day.")
-                    self.manager_state = 'cooldown'
-                    now = datetime.now(); tomorrow = datetime.combine(now.date()+timedelta(days=1),datetime.min.time())
-                    sleep_dur = (tomorrow-now).total_seconds() + random.uniform(60,300)
-                    logging.info(f"Sleeping ~{sleep_dur/3600:.2f} hrs.")
-                    time.sleep(sleep_dur)
-                    self._update_overmind_params() # Force daily reset
-                    self.manager_state = 'spawning'; self.current_spawning_start_time = time.time()
-                    logging.info("Daily quota reset. Resuming spawning."); continue
-
-                if self.manager_state == 'spawning':
-                    if (time.time()-self.current_spawning_start_time) > self.active_spawning_duration_max:
-                        logging.info(f"Spawn window ({self.active_spawning_duration_max/60:.0f}m) ended. Cooldown. Daily:{self.daily_session_count}/{DAILY_VISIT_QUOTA}")
-                        self.manager_state = 'cooldown'
-                    else:
-                        if len(self.active_threads) < self.current_max_threads and self.daily_session_count < DAILY_VISIT_QUOTA:
-                            logging.debug(f"Spawning. Active:{len(self.active_threads)}, Max:{self.current_max_threads}, Daily:{self.daily_session_count}/{DAILY_VISIT_QUOTA}")
-                            if not self.run_session() and self.daily_session_count >= DAILY_VISIT_QUOTA: # Quota might be hit by run_session itself
-                                logging.info("Quota hit by run_session. Cooldown."); self.manager_state = 'cooldown'
-                        elif len(self.active_threads) >= self.current_max_threads:
-                            rem_spawn_t = self.active_spawning_duration_max - (time.time()-self.current_spawning_start_time)
-                            logging.debug(f"Max threads ({self.current_max_threads}) in spawn. Waiting. ({rem_spawn_t/60:.1f}m left)")
-                            time.sleep(random.uniform(3,7))
-                        # Implicit else: quota is hit (self.daily_session_count >= DAILY_VISIT_QUOTA), will be handled by top block
-                
-                elif self.manager_state == 'cooldown':
-                    if self.daily_session_count < DAILY_VISIT_QUOTA: # Cooldown only if quota not met
-                        cd_dur = random.uniform(self.min_cooldown_seconds, self.max_cooldown_seconds)
-                        logging.info(f"Cooldown. Daily:{self.daily_session_count}/{DAILY_VISIT_QUOTA}. Sleep {cd_dur/60:.1f}m.")
-                        time.sleep(cd_dur)
-                        logging.info("Cooldown end. Spawning.")
-                        self.manager_state='spawning'; self.current_spawning_start_time=time.time()
-                    else: # Quota met during cooldown phase itself or spawning. Defer to top block.
-                        logging.debug(f"Cooldown but quota met ({DAILY_VISIT_QUOTA}). Main quota logic will take over.")
-                        time.sleep(60)
-
-                # Short general sleep to prevent tight loops if no other sleep condition met
-                if not (self.manager_state=='spawning' and len(self.active_threads)<self.current_max_threads and self.daily_session_count < DAILY_VISIT_QUOTA):
-                    time.sleep(random.uniform(1,3))
+                # Check if we have capacity to launch a new thread
+                if len(self.active_threads) < self.current_max_threads:
+                    logging.debug(f"Spawning new session. Active Threads: {len(self.active_threads)} < Max: {self.current_max_threads}")
+                    self.run_session()
+                else:
+                    # If at max capacity, wait a bit before re-checking to prevent a tight loop.
+                    logging.debug(f"Max threads ({self.current_max_threads}) reached. Waiting for a slot to open.")
+                    time.sleep(random.uniform(3, 7))
 
         except KeyboardInterrupt: logging.info("KeyboardInterrupt. Shutting down...")
         except Exception as e: logging.critical(f"Manager CRITICAL ERROR: {e}",exc_info=True)
@@ -1028,68 +999,33 @@ class NeuroThreadManager:
             logging.info("All agent threads handled. Exiting manager.")
 
 
-# --- Email Configuration & Firebase ---
+# --- Email Configuration ---
 def send_gmail_email_alert(subject, body, to_email):
+    # Reads credentials from environment variables set by GitHub Actions Secrets
     from_email = os.getenv("FIREBASE_GMAIL_USER")
     from_password = os.getenv("FIREBASE_GMAIL_APP_PASSWORD")
-    if not from_email or not from_password: return
-    msg = MIMEMultipart(); msg['From'] = from_email; msg['To'] = to_email; msg['Subject'] = subject
+
+    if not from_email or not from_password:
+        logging.warning("Email credentials not found in environment variables. Cannot send alert.")
+        return
+
+    msg = MIMEMultipart()
+    msg['From'] = from_email
+    msg['To'] = to_email
+    msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain', _charset='utf-8'))
-    for _ in range(2):
+
+    for attempt in range(2): # Try twice
         try:
             with smtplib.SMTP('smtp.gmail.com', 587) as server:
-                server.starttls(); server.login(from_email, from_password); server.send_message(msg)
-                logging.info(f"✅ Alert '{subject[:30]}...' sent to {to_email}"); return
-        except Exception as e: logging.warning(f"❌ Alert send fail: {e}"); time.sleep(3)
-
-FIREBASE_SERVICE_ACCOUNT_PATH = r"C:\Users\Sean\Documents\agenets-workers-to-send-emails-firebase-adminsdk-fbsvc-00510b8385.json" # Path or None
-GMAIL_USER_QUEUE = "triggerhappygod@gmail.com"
-GMAIL_PASS_QUEUE = "ebmmdrauvfpderdr" # App Password
-db = None
-USE_FIREBASE_QUEUE = False
-
-if USE_FIREBASE_QUEUE:
-    try:
-        if FIREBASE_SERVICE_ACCOUNT_PATH and Path(FIREBASE_SERVICE_ACCOUNT_PATH).is_file():
-            if not firebase_admin._apps:
-                cred = credentials.Certificate(FIREBASE_SERVICE_ACCOUNT_PATH)
-                firebase_admin.initialize_app(cred); logging.info("Firebase SDK init OK.")
-            db = firestore.client()
-        else: logging.warning("Firebase Svc Acc path invalid/missing. FB Queue disabled."); USE_FIREBASE_QUEUE=False
-    except Exception as e: logging.critical(f"Firebase init fail: {e}"); db=None; USE_FIREBASE_QUEUE=False
-else: logging.info("Firebase queue disabled by USE_FIREBASE_QUEUE setting.")
-
-
-def send_queued_email(to, subject, body, html_body=None):
-    if not (GMAIL_USER_QUEUE and GMAIL_PASS_QUEUE): logging.warning("FB GMAIL creds not set."); return False
-    msg = MIMEText(html_body or body, "html" if html_body else "plain", _charset='utf-8')
-    msg["Subject"]=subject; msg["From"]=GMAIL_USER_QUEUE; msg["To"]=to
-    for _ in range(2):
-        try:
-            with smtplib.SMTP("smtp.gmail.com",587) as s:
-                s.starttls();s.login(GMAIL_USER_QUEUE,GMAIL_PASS_QUEUE);s.send_message(msg)
-                logging.info(f"✅ Queued email '{subject[:30]}...' sent to {to}"); return True
-        except Exception as e: logging.warning(f"❌ Queued email send fail: {e}"); time.sleep(3)
-    logging.error(f"❌ Failed queued email to {to}."); return False
-
-def process_email_queue():
-    if db is None or not USE_FIREBASE_QUEUE: logging.info("FB Queue inactive. Processor not starting."); return
-    logging.info("FB Email Queue Processor Start.")
-    while True:
-        try:
-            docs = db.collection("mail_queue").limit(5).stream(); processed=0
-            for doc in docs:
-                data = doc.to_dict()
-                to, subj = data.get("to"), data.get("message",{}).get("subject","No Subject")
-                body, html = data.get("message",{}).get("text",""), data.get("message",{}).get("html")
-                if to and subj and (body or html):
-                    if send_queued_email(to,subj,body,html): doc.reference.delete(); processed+=1
-                    else: logging.error(f"Failed FB email job {doc.id}, will retry.")
-                else: logging.warning(f"Invalid FB email job {doc.id}, deleting."); doc.reference.delete()
-            if processed==0: logging.debug("No new FB emails this check.")
-            elif processed > 0: logging.info(f"Processed {processed} FB emails.")
-        except Exception as e: logging.critical(f"FB Email Queue CRITICAL: {e}",exc_info=True)
-        finally: time.sleep(random.uniform(25,45))
+                server.starttls()
+                server.login(from_email, from_password)
+                server.send_message(msg)
+                logging.info(f"✅ Alert '{subject[:30]}...' sent to {to_email}")
+                return # Success
+        except Exception as e:
+            logging.warning(f"❌ Alert send fail (attempt {attempt + 1}): {e}")
+            time.sleep(3)
 
 
 # --- Main Execution ---
@@ -1098,16 +1034,14 @@ if __name__ == "__main__":
         "https://thedealsdetective.blogspot.com/",
     ]
     if not any(url.strip() for url in target_site_list if isinstance(url, str)):
-        logging.critical("No valid target URLs. Exiting."); sys.exit(1)
+        logging.critical("No valid target URLs provided. Exiting.")
+        sys.exit(1)
 
+    # The script now relies on environment variables for credentials.
+    # Set these in your OS or through GitHub Actions Secrets:
     # os.environ["FIREBASE_GMAIL_USER"] = "your_alert_email@gmail.com"
     # os.environ["FIREBASE_GMAIL_APP_PASSWORD"] = "your_gmail_app_password"
-
-    if USE_FIREBASE_QUEUE and db is not None:
-        email_thread = threading.Thread(target=process_email_queue, daemon=True, name="EmailQueueProcessor")
-        email_thread.start(); logging.info("Firebase Email Queue Processor thread started.")
-    else:
-        logging.info("Firebase Email Queue Processor NOT started (FB disabled or DB init fail).")
+    # os.environ["HTTP_PROXIES_LIST"] = "proxy1,proxy2,..."
 
     manager = NeuroThreadManager(target_urls=target_site_list)
     manager.run()
