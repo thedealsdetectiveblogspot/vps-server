@@ -8,7 +8,6 @@ on:
   workflow_dispatch:
 
   # 2. (Optional but recommended) Automatically starts the workflow when you push code to the main branch.
-  # You would still need to cancel the old run and let the new one proceed.
   push:
     branches: [ "main" ]
 
@@ -52,11 +51,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install numpy selenium requests fake-useragent psutil "urllib3<2"
 
-      # Step 6: Run your Python script.
-      # It uses the "env" block to securely pass your secrets as environment variables.
+      # Step 6: Run your Python script with the CORRECT filename.
       - name: Run Neuro Bot Script
         env:
           FIREBASE_GMAIL_USER: ${{ secrets.FIREBASE_GMAIL_USER }}
           FIREBASE_GMAIL_APP_PASSWORD: ${{ secrets.FIREBASE_GMAIL_APP_PASSWORD }}
-          HTTP_PROXIES_LIST: ${{ secrets.HTTP_PROXIES_LIST }}
-        run: python neuro_bot_illusion_lite.py
+        run: python "Final version minions works gemeini buildt.py"
